@@ -1,0 +1,251 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% for testing iBGP.P (2024/06/05 14:30:00)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% ilink(X,Y,Z), iBGP session between X and Y, where X learns from Y a BGP route with a IGP-cost Z
+ilink(a,b,5). ilink(a,c,4). ilink(d,e,12).
+ilink(a,d,1). ilink(d,a,1).
+
+iBGPnodes([a,d]).
+
+% med(X,Y,Z)
+% med(b,as10,10). med(c,as6,1). med(e,as6,0).
+
+% eroute(EBGP_Node, (MED, AS_Path)), route learned form eBGP session
+eroute(b,(10,[10,100])).
+eroute(c,(1,[6,100])).
+eroute(e,(0,[6,100])).
+
+% ------------------------------------------------------------------
+% generate initial routes (from routes injected by eBGP)
+% i: installed, but not selected (as the best)
+% R(label, AS_Path, MED, IGP, learned_from)
+
+% format of all routes: (node_ID, [route1,route2,...])
+% format of each route (Label, AS_Path, MED, IGP_Cost, IGP_Path)
+% init_routes(Rs) :- 
+% 	iBGPnodes(Ns), init_routes_allNodes(Ns,Rs).
+
+init_route(X,R) :- ilink(X,Y,IGP_Cost), eroute(Y,(MED,AS_Path)), R = (i,AS_Path,MED,IGP_Cost,[Y]).
+
+% X must be instantiated
+init_routes_perNode(X,(X,Rs2)) :- findall(R, init_route(X,R), Rs),
+	bgp_select_route(Rs,[B]), mark_selected(Rs,B,Rs2).
+% findall behavior: terrible, many possibilities (2024/06/07 01:42:58)
+
+init_routes_allNodes([],[]).
+init_routes_allNodes([H|T],[RH|Rs]) :- 
+	init_routes_perNode(H,RH),
+	init_routes_allNodes(T,Rs).
+
+% given a list of routes, select a best (list), first based on MED comparison, then IGP comparison
+bgp_select_route(L,L3) :- select_MED(L,L2), select_IGP_Cost(L2,L3).
+
+% mark_selected(route list L, best route B, marked the best route in L)
+mark_selected([(L,A,M,I,N)|T],(L2,A,M,I,N),[(*,A,M,I,N)|T2]) :- mark_selected(T,(L2,A,M,I,N),T2).
+mark_selected([(L,A,M,I,N)|T],(L2,A2,M2,I2,N2),[(i,A,M,I,N)|T2]) :- 
+	(A,M,I)\=(A2,M2,I2), mark_selected(T,(L2,A2,M2,I2,N2),T2).
+mark_selected([],B,[]).
+
+% select best paths by MED value
+select_MED(L1,L2) :- select_MED(L1,L1,L2).
+select_MED([],L,[]).
+select_MED([H|T],L,[H|T2]) :- 
+	get_AS_Path(H,P), get_MED(H,M), retain_MED(P,M,L), select_MED(T,L,T2).
+select_MED([H|T],L,T2) :- 
+	get_AS_Path(H,P), get_MED(H,M), not retain_MED(P,M,L), select_MED(T,L,T2).
+
+% if the route with AS_Path and MED fields should be retained
+retain_MED(AS_Path, MED, []).
+retain_MED(AS_Path, MED, [(L,AS_Path2,MED2,IGP_Cost,N)|T]) :- 
+	AS_Path \= AS_Path2, retain_MED(AS_Path, MED, T).
+retain_MED(AS_Path, MED, [(L,AS_Path,MED2,IGP_Cost,N)|T]) :- 
+	MED=<MED2, retain_MED(AS_Path, MED, T).
+
+% test data
+% t([(i,[6,100],0,13), (i,[6,100],1,4), (i,[10,100],10,5)]).
+
+select_IGP_Cost([E],[E]).
+select_IGP_Cost([H|T],T2) :- 
+	get_IGP_Cost(H,I), not retain_IGP_Cost(I,T), select_IGP_Cost(T,T2).
+select_IGP_Cost([H|T],[H]) :- 
+	get_IGP_Cost(H,I), retain_IGP_Cost(I,T).
+
+retain_IGP_Cost(IGP_Cost,[]).
+retain_IGP_Cost(IGP_Cost,[H|T]) :-
+	get_IGP_Cost(H,I), IGP_Cost =< I, retain_IGP_Cost(IGP_Cost,T).
+
+get_AS_Path((L,AS_Path,MED,IGP_Cost,N), AS_Path).
+get_MED((L,AS_Path,MED,IGP_Cost,N), MED).
+get_IGP_Cost((L,AS_Path,MED,IGP_Cost,N), IGP_Cost).
+get_lable((L,AS_Path,MED,IGP_Cost,N),L).
+get_IGP_Path((L,AS_Path,MED,IGP_Cost,N),N).
+
+% get_selected(list of routes, best_route)
+get_selected([],nil).
+get_selected([H|T],H) :- 
+	get_lable(H,*), get_selected(T,T2).
+get_selected([H|T],T2) :- 
+	get_lable(H,i), get_selected(T,T2).
+
+% locate(N,S,L), given an iBGP node N, a network state S (lists of all nodes info), locate its routes/message queue L
+locate(N,[],[]).
+locate(N, [(N2,L2)|T],L) :- N\=N2, locate(N,T,L).
+locate(N, [(N,L)|T],L).
+
+% update_n(N,L,S1,S2) for node N, and its new route/message queue, udpate the network wide state from S1 to S2
+% update_n(N,L,[],[]). error
+update_n(N,L,[(N2,L2)|T], [(N2,L2)|T2]) :- N\=N2, update_n(N,L,T,T2).
+update_n(N,L,[(N,L2)|T], [(N,L)|T]).
+
+% init_empty_Ms(Ns,Ms)
+% for all iBGP nodes Ns, generate their empty message queues Ms, of the format '(N,[])'
+generate_empty_Ms([],[]).
+generate_empty_Ms([N|T], [(N,[])|Ms]) :- 
+	generate_empty_Ms(T,Ms).
+
+% test: iBGPnodes(X), generate_empty_Ms(X,Ms)
+
+% for iBGP nodes Ns, given its initial routing state Rs, generate initial message queues Ms
+% init_announce(Ns,Rs,Ms,Ms_out)
+init_announce([],Rs,Ms,Ms). % nothing to announce
+init_announce([N|T],Rs,Ms_i,Ms_o) :- 
+	locate(N,Rs,Rs_n), get_selected(Rs_n,B), announce(N,B,Ms_i,Ms), init_announce(T,Rs,Ms,Ms_o).
+
+iBGP_session(X,Y) :- ilink(X,Y,C), iBGPnodes(N), member(Y,N).
+iBGP_neighbors(X,Ys) :- findall(Y, iBGP_session(X,Y), Ys).
+
+% announce(N,B,Ms_i,Ms_o), node N updates message queues from Ms_i to Ms_o with an announcement created from a newly selected route B.
+% announce(N,Ys,B,Ms_i,Ms_o), Ys is the neighbours of N, to which the announcement is made
+announce(N,B,Mi,Mo) :- iBGP_neighbors(N,Ys), announce(N,Ys,B,Mi,Mo).
+announce(N,[],B,Mi,Mi).
+% for a particular neighbour H, update its message queue with B
+announce(N,[H|T],B,Mi,Mo) :- 
+	announce(N,T,B,Mi,M), locate(H,M,L), update_IGP_Path(N,B,R), Lnew=[R|L], update_n(H,Lnew,M,Mo).
+
+% change the announcer field of the route record
+update_IGP_Path(K,(F,P,M,I,I_P),(i,P,M,I,[K|I_P])).
+
+% test: announce(a,(*,[6,100],1,4,c),[(a,[]),(d,[])],X).
+
+% nc(Message Queue Lists, List of Nodes Not Converged)
+nc([],[]).
+nc([(N,[])|T],T2) :- nc(T,T2).
+nc([(N,L)|T],[N|T2]) :- nc(T,T2).
+
+% initialize routing states Rs, and message queues Ms, and list of nodes Ns not converged
+init(Rs,Ms,Ns) :- iBGPnodes(X), 
+	init_routes_allNodes(X,Rs), 
+	generate_empty_Ms(X,Me), init_announce(X,Rs,Me,Ms),
+	nc(Ms,Ns), write('---------Initialize the state of the iBGP system---------').
+
+% ------------------------------------------------------------------
+% at current state (Ms,Ns)
+% Ms: list of message queues, Ns: list of active nodes (those with a non-empty queue)
+% format of each queue [node ID, route message 1, ...]
+% randomly pick a node K (any member from Ns) from the active set Ns, consume the first message M in K's message queue
+
+pick(Ms,Ns,Ms2,K,M) :- 
+	member(K,Ns), locate(K,Ms,Q_k), dequeue(Q_k,M,T_k), update_n(K,T_k,Ms,Ms2).
+
+% dequeue((K,[M|T]),M,T). % need to modify to pick the last element
+% dequeue((K,[M|T]),M,T).
+% enqueue((K,T),M,(K,[M|T])).
+% dequeue(Ms,M,T), given the list Ms, fetch the last (oldest) element M, also get the remaining T
+dequeue(Ms,M,T) :- last(Ms,M), first_remain(Ms,T).
+
+last(L,Last) :- reverse(L,L2), head(L2,Last).
+first_remain(L,Fs) :- reverse(L,L2), remain(L2,L3), reverse(L3,Fs).
+head([H|T],H).
+remain([H|T],T).
+
+enqueue((K,T),M,(K,[M|T])).
+
+reverse([],[]).
+reverse([H|L],R) :- reverse(L,L2), append(L2,[H],R).
+	
+% bgp_process(Rs,K,M,R2) :- 
+% 	locate(K,Rs,T_k), Q_k=[M|T_k], bgp_select_route(Q_k,Q_k2), update_n(K,Q_k2,Rs,Rs2).
+
+bgp_process(Rs,K,M2,Rs2,Flag,B) :- 
+	new_route(K,M2,M), 
+	locate(K,Rs,T_k), insert_route(M,T_k,Q_k), % Q_k=[M|T_k], 
+	bgp_select_route(Q_k,[B]),
+	mark_selected(Q_k,B,Q_k2), update_n(K,Q_k2,Rs,Rs2),
+	best_changed(T_k,B,Flag).
+
+insert_route(M,[],[M]).
+insert_route(M,[H|T],[M|T]) :- 
+	get_IGP_Path(M,[I_H|I_T]), get_IGP_Path(H,[I_H|I_T2]), get_lable(M,i). % replace an exiting route from the same IGP  announcer
+insert_route(M,[H|T],T) :- 
+	get_IGP_Path(M,[I_H|I_T]), get_IGP_Path(H,[I_H|I_T2]), get_lable(M,w). % drop an exiting route from the same IGP  announcer, if the new path is not usable (IGP loop, marked "w"--withdraw)
+
+insert_route(M,[H|T],[H|T2]) :- 
+	get_IGP_Path(M,[I_H|I_T]), get_IGP_Path(H,[I_H2|I_T2]), insert_route(M,T,T2). % leave H untouched, if M and H are from different announcers
+
+new_route(K,(F,P,M,I_C,I_P), (i,P,M,I_C2,I_P)) :- ilink(K,A,C), I_C2 is I_C+1, not member(K,I_P).
+new_route(K,(F,P,M,I_C,I_P), (w,P,M,I_C2,I_P)) :- member(K,I_P).
+
+best_changed(Rs_k,B_new,1) :- get_selected(Rs_k,B_old), B_old \=B_new.
+best_changed(Rs_k,B_new,0).
+% best_changed(Rs_k,B_new,0) :- get_selected(Rs_k,B_old), B_old ==B_new.
+
+re_announce(0,N,B,Mi,Mi). % nothing to announce, so message queue Mi remains unchanged
+% re_announce(1,N,B,Mi,Mo) :- update_IGP_Path(N,B,A), announce(N,A,Mi,Mo).
+re_announce(1,N,B,Mi,Mo) :- announce(N,B,Mi,Mo).
+
+% % ------------------------------------------------------------------
+% % run route computation, up to N steps, and return the number of iterations (Nf) towards termination
+% demo2(N,X1,Z1,Nf) :- init(X,Y,Z),
+% 	demo2(N,X,Y,Z,X1,Y1,Z1,Nf).
+
+% demo2(0,X,Y,Z,X,Y,Z,0).
+% demo2(N,X,Y,[],X,Y,[],0).
+% demo2(N,X,Y,Z,X2,Y2,Z2,Nc) :- 
+% 	N>0, N1 is N-1, Z\= [],
+% 	t(X,Y,Z,X1,Y1,Z1), 
+% 	demo2(N1,X1,Y1,Z1,X2,Y2,Z2,Nc2), Nc is Nc2+1.
+
+% % after N iterations of route computations, the state of the network (X,Y,Z) (routes, message queues, active nodes)
+% demo(N,X1,Y1,Z1) :- init(X,Y,Z), demo(X,Y,Z,X1,Y1,Z1,N).
+
+% demo(X,Y,Z,X,Y,Z,0).
+% demo(X,Y,Z,X2,Y2,Z2,N) :- 
+% 	N>0, N1 is N-1,
+% 	t(X,Y,Z,X1,Y1,Z1),
+% 	demo(X1,Y1,Z1,X2,Y2,Z2,N1).
+
+% tested, 2024/06/08 04:04:12
+% demo(3,X,Y,Z).
+% ---------Initialize the state of the iBGP system---------
+% X = [(a,[(*,[10,100],10,5,[b]),(i,[6,100],1,4,[c]),(i,[6,100],0,13,[d,e])]),(d,[(i,[6,100],0,12,[e]),(*,[10,100],10,6,[a,b])])]
+% Y = [(a,[(i,[10,100],10,6,[d,a,b])]),(d,[])]
+% Z = [a]
+
+% demo(3,X,Y,Z). demo(4,X,Y,Z). demo(5,X,Y,Z). demo(6,X,Y,Z). demo(7,X,Y,Z). demo(8,X,Y,Z).
+
+% ------------------------------------------------------------------
+% hotnets 2024
+% finally, unifying control plane and data plane!
+% 2024/06/14 07:37:32
+delta([Rs,Ms,Ns],[Rs2,Ms3,Ns3]) :- 
+	pick(Ms,Ns,Ms2,K,M),
+	bgp_process(Rs,K,M,Rs2,F,B),
+	re_announce(F,K,B,Ms2,Ms3),
+	nc(Ms3,Ns3).
+
+run_ibgp(N,[X1,Y1,Z1]) :- init(X,Y,Z), net(N,[X,Y,Z],[X1,Y1,Z1]).
+
+% tested, 2024/06/15 20:57:44, confirmed, 2024/06/17 22:55:40, 2024/06/18 05:48:47
+% in the hotnets folder: load_dyn(common). load_dyn(ibgp). load_dyn(meta).
+% rBGP_delta(run_ibgp(6,O),T),nl,print3(T),nl.
+
+% | ?- cb(run_ibgp(6,X),P).
+% ---------Initialize the state of the iBGP system---------
+% X = [[(a,[(*,[10,100],10,5,[b]),(i,[6,100],1,4,[c]),(i,[6,100],0,13,[d,e])]),(d,[(*,[6,100],0,12,[e]),(i,[6,100],1,5,[a,c])])],[(a,[]),(d,[(i,[10,100],10,5,[a,b])])],[d]]
+% P = [a : (i,[10,100],10,5,[b]),d : (*,[6,100],0,12,[e]),d : (i,[10,100],10,6,[a,b]),a : (i,[6,100],1,4,[c]),d : (i,[6,100],0,12,[e]),a : (i,[10,100],10,5,[b])]
+
+% yes
+
+% tested, 2024/06/17 22:57:58
+% ptree(run_ibgp(6,O)).
+% ------------------------------------------------------------------

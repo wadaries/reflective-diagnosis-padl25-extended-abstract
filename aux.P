@@ -1,0 +1,245 @@
+% for testing pv.P (2024/06/05 14:29:37)
+
+link(1,0,6). link(2,0,3). link(3,0,100). link(1,2,2). link(2,1,2). link(1,3,1). link(3,1,1). link(2,3,5). link(3,2,5).
+
+announce_edge(X,Y) :- 
+	link(X,Y,Z), Y\=0, Z\=100.
+
+neighbours(X,Ys) :- 
+	findall(Y, announce_edge(X,Y), Ys).
+from(([H|T],C),H).
+cost(([H|T],C),C).
+
+% loop_free(X,(R,C)) :- not member(X,R).
+loop(X,(R,C)) :- member(X,R).
+loop_free(X,(R,C)) :- loop_free_path(X,R).
+
+% % ------------------------------------------------------------------
+% forwarding behavior (data-plane)
+% % ------------------------------------------------------------------
+% forwarding edges
+edge(1,2). edge(1,4). edge(2,3). edge(2,4). edge(1,5). edge(5,6).
+edge(6,1). % add forwarding loop
+edge(7,8). edge(8,9). edge(8,3).
+
+reach(X,Y) :- edge(X,Y).
+reach(X,Y) :- edge(X,Z), reach(Z, Y).
+
+path(X,Y,[X,Y]) :- edge(X,Y).
+path(X,Y,P) :- edge(X,Z), Z\=X, Z\=Y, path(Z,Y,P1), loop_free_path(X,P1), P=[X|P1].
+
+reachall(X,Y) :- path(X,Y,P), write(P), fail. % 2024/06/08 22:50:25, copied from bgp.P
+% path(X,Y,[X,Y]) :- edge(X,Y).
+% path(X,Y,[X|P]) :- edge(X,Z), path(Z,Y,P). 
+
+% % 2024/05/15 03:18:21
+% reachall(X,Y) :- path(X,Y,P), write(P), fail. copied from 
+
+hop(X,Y,C) :- path(X,Y,P), length(P,C).
+% hop(X,Y,1) :- edge(X,Y).
+% hop(X,Y,H) :- edge(X,Z), hop(Z, Y,H1), H is H1+1.
+
+% loop_free_path(Node,Path), Node is not in Path
+loop_free_path(X,[]).
+loop_free_path(X,[Y|T]) :- X\=Y, loop_free_path(X,T).
+
+% safe
+sf([X]).
+sf([H|T]) :- loop_free_path(H,T), sf(T).
+% edge(3,1).
+
+
+% fw(bound,initial location, final location,steps)
+fw(B,L,L2,S) :- inject(L,Ns), fw(B,L,Ns,L2,N2s,S).
+inject(L,Ns) :- findall(N,edge(L,N),Ns).
+
+fw(0,L,Ns,L2,N2s,S).
+fw(B,L,[],L,[],0).
+fw(B,L,Ns,L2,N2s,S) :- 
+	B>0, B1 is B-1, Ns\=[],
+	fw_t(L,Ns,L1,N1s), 
+	fw(B1,L1,N1s,L2,N2s,S2), S is S2+1.
+
+fw_t(L1,N1s,L2,N2s) :- 
+	findall(N1,edge(L1,N1),N1s),
+	member(L2,N1s), findall(N2,edge(L2,N2),N2s).
+% inject(L,Ns) :- findall(N,edge(L,N),Ns).
+% inject(1,X),t(1,X,Y,Z).
+
+% fw2(bound, +source, +destination, steps), avoiding pitfalls of findall
+fw2(0,Ls,Lt,S).
+% fw2(B,L,L,0).
+fw2(B,Ls,Ls,0) :- 
+	not edge(Ls,Y).
+fw2(B,Ls,Lt,S) :- 
+	B>0, B1 is B-1,
+	edge(Ls,M),
+	fw2(B1,M,Lt,S2), S is S2+1.
+
+dplane(S,D,Steps) :- fw2(100,S,D,Steps).
+
+% fw3(0,Ls,Lt).
+
+t(X,Y) :- edge(X,Y).
+t(X,X) :- not edge(X,Y).
+
+fw3(0,S,S).
+fw3(B,S,D) :- 
+	B>0, B1 is B-1,
+	fw3(B1,S,M), 
+	t(M,D).
+
+dplane3(S,D) :- fw3(5,S,D).
+
+% collect(dplane3(1,X),T,C), not sf(C).
+% X = 3
+
+% % ------------------------------------------------------------------
+% hotnets2024 2024/06/18 00:37:35
+% only load_dyn(net). load_dyn(meta).
+
+% collect(dplane3(X,Y),T,C), not sf(C).
+
+% % ------------------------------------------------------------------
+% 2024/06/14 06:24:58
+
+% net(0,[S],[S]).
+% net(B,[S],[D]) :- 
+% 	B>0, B1 is B-1,
+% 	delta([S],[M]), 
+% 	net(B1,[M],[D]).
+
+% | ?- collect(net(5,[1],[X]),T,C), not sf(C).
+
+% X = 6
+% T = (net(5,[1],[6]) :- (5 > 0 :- builtin),(4 is 5 - 1 :- builtin),(delta([1],[5]) :- (edge(1,5) :- true)),(net(4,[5],[6]) :- (4 > 0 :- builtin),(3 is 4 - 1 :- builtin),(delta([5],[6]) :- (edge(5,6) :- true)),(net(3,[6],[6]) :- (3 > 0 :- builtin),(2 is 3 - 1 :- builtin),(delta([6],[1]) :- (edge(6,1) :- true)),(net(2,[1],[6]) :- (2 > 0 :- builtin),(1 is 2 - 1 :- builtin),(delta([1],[5]) :- (edge(1,5) :- true)),(net(1,[5],[6]) :- (1 > 0 :- builtin),(0 is 1 - 1 :- builtin),(delta([5],[6]) :- (edge(5,6) :- true)),(net(0,[6],[6]) :- true))))))
+% C = [edge(1,5),edge(5,6),edge(6,1),edge(1,5),edge(5,6)]
+
+
+% net(0,s(S),s(S)).
+% net(B,s(S),s(T)) :- 
+% 	B>0, B1 is B-1,
+% 	delta(s(S),s(M)), 
+% 	net(B1,s(M),s(T)).
+
+% net(0,S,S).
+% net(B,S,T) :- 
+% 	B>0, B1 is B-1,
+% 	delta(S,M),
+% 	net(B1,M,T).
+
+% delta(X,Y) :- edge(X,Y).
+% delta(X,X) :- not edge(X,Y).
+
+% ------------------------------------------------------------------
+% 2024/06/14 07:23:56
+net(0,S,S).
+net(B,S,T) :- 
+	B>0, B1 is B-1,
+	delta(S,M), 
+	net(B1,M,T).
+
+delta(X,Y) :- edge(X,Y).
+delta(X,X) :- not edge(X,Y).
+
+% | ?- collect(net(5,1,X),T,C), not sf(C).
+% X = 6
+% T = (net(5,1,6) :- (5 > 0 :- builtin),(4 is 5 - 1 :- builtin),(delta([1],[5]) :- (edge(1,5) :- true)),(net(4,5,6) :- (4 > 0 :- builtin),(3 is 4 - 1 :- builtin),(delta([5],[6]) :- (edge(5,6) :- true)),(net(3,6,6) :- (3 > 0 :- builtin),(2 is 3 - 1 :- builtin),(delta([6],[1]) :- (edge(6,1) :- true)),(net(2,1,6) :- (2 > 0 :- builtin),(1 is 2 - 1 :- builtin),(delta([1],[5]) :- (edge(1,5) :- true)),(net(1,5,6) :- (1 > 0 :- builtin),(0 is 1 - 1 :- builtin),(delta([5],[6]) :- (edge(5,6) :- true)),(net(0,6,6) :- true))))))
+% C = [edge(1,5),edge(5,6),edge(6,1),edge(1,5),edge(5,6)]
+
+% yes
+
+% ------------------------------------------------------------------
+% 2024/06/15 21:21:24 ... Hotnets
+
+init(X).
+run_dp(N,X,Y) :- init(X), net(N,X,Y).
+
+delta([H,L],[H2,L2]) :- node_tran(H,H2), edge_tran(L,L2). % each transition is a header rewrite, followed by a location rewrite
+edge_tran(X,Y) :- edge(X,Y).
+edge_tran(X,X) :- not edge(X,Y).
+node_tran(H,H). % no header rewrite
+
+% collect(run_dp(5,['h',1],X),T,C), not sf(C), print2(T). 2024/06/15 21:21:01
+
+% ------------------------------------------------------------------
+
+% delta(s(X),s(Y)) :- edge(X,Y).
+% delta(s(X),s(X)) :- not edge(X,Y).
+
+% | ?- collect(net(5,s(1),s(X)),T,C), not sf(C).
+
+% X = 6
+% T = (net(5,s(1),s(6)) :- (5 > 0 :- builtin),(4 is 5 - 1 :- builtin),(delta(s(1),s(5)) :- (edge(1,5) :- true)),(net(4,s(5),s(6)) :- (4 > 0 :- builtin),(3 is 4 - 1 :- builtin),(delta(s(5),s(6)) :- (edge(5,6) :- true)),(net(3,s(6),s(6)) :- (3 > 0 :- builtin),(2 is 3 - 1 :- builtin),(delta(s(6),s(1)) :- (edge(6,1) :- true)),(net(2,s(1),s(6)) :- (2 > 0 :- builtin),(1 is 2 - 1 :- builtin),(delta(s(1),s(5)) :- (edge(1,5) :- true)),(net(1,s(5),s(6)) :- (1 > 0 :- builtin),(0 is 1 - 1 :- builtin),(delta(s(5),s(6)) :- (edge(5,6) :- true)),(net(0,s(6),s(6)) :- true))))))
+% C = [edge(1,5),edge(5,6),edge(6,1),edge(1,5),edge(5,6)]
+
+% yes
+
+% % ------------------------------------------------------------------
+
+builtin(not A).
+builtin(A is B). builtin(read(X)). builtin(integer(X)). builtin(clause(A,B)).
+builtin(A > B). builtin(write(X)) . builtin(functor(T,F,N)). 
+builtin(builtin(X)).
+builtin(random(X,Y,Z)).
+builtin(findall(X,Y,Z)).
+builtin(X \= Y). builtin(X >= Y). builtin(X =< Y). builtin(X==Y). builtin(X<Y). builtin(X=Y).
+builtin(member(X,Y)). builtin(length(X,Y)). builtin(append(X,Y,Z)). builtin(reverse(X,Y)). builtin(ith(K,L,E)). builtin(loop_free_path(X,Y)).
+
+builtin(retain_MED(X,Y,Z)).
+builtin(select_MED(X,Y)).
+builtin(select_IGP_Cost(X,Y)).
+builtin(mark_selected(X,Y,Z)).
+builtin(init(X,Y,Z)).
+% builtin(bgp_process(Rs,K,M2,Rs2,Flag,B)).
+
+% % ------------------------------------------------------------------
+% list facilities
+% % ------------------------------------------------------------------
+
+length([],0).
+length([H|T],L) :- length(T,L1), L is L1+1.
+
+ith(1,[H|T],H).
+ith(I,[H|T],E) :- I>1, I1 is I-1, ith(I1,T,E).
+
+member(X,[X|T]).
+member(X,[H|T]) :- member(X,T).
+
+% lower(Xs,N,Ls): for a list Xs, generate the list of Xs[1...N] (lower N elements)
+lower(Ms,0,[]).
+lower(Ms,N,Ms2) :- N>0, N1 is N-1, lower(Ms,N1,Ms1), ith(N,Ms,E), append(Ms1,[E],Ms2).
+
+% higher(Xs,N,Hs): for a list Xs, generate the list of Xs[N...length of Xs] (higher length-N+1 elements)
+higher(Ms,N,[]) :- length(Ms,L), L1 is L+1, N==L1.
+higher(Ms,N,Ms2) :- length(Ms,L), N=<L, N1 is N+1, higher(Ms,N1,Ms1), ith(N,Ms,E), Ms2=[E|Ms1].
+
+
+% active(Ms,Ns), given the nodes' message queues, find the list of active nodes (the message queue of which is not empty)
+active([],[]).
+active([H|T],[E|Ns1]) :- 
+	length(H,L), L>1,% !, 
+	active(T,Ns1), ith(1,H,E).
+active([H|T],Ns) :- 
+	length(H,L),L==1, active(T,Ns).
+
+delete_elem(K,[K|T],T).
+delete_elem(K,[L|T],[L|T2]) :- L\=K, delete_elem(K,T,T2).
+% 2024/06/05 04:03:57 fix bug: [L|T2] instead of [K|T2]
+
+
+% delete_ith(I,L,E,R), delete I-th element E from list L, resulting in R
+delete_ith(I,L,E,R) :-
+	ith(I,L,E), 
+	Il is I-1, lower(L,Il,Ls),
+	Ih is I+1, higher(L,Ih,Hs),
+	append(Ls,Hs,R).
+
+% insert_ith(I,L,E,R), insert element E at the I-th position in list L, resulting in R
+insert_ith(I,L,E,R) :-
+	Il is I-1, lower(L,Il,Ls),
+	higher(L,I,Hs),
+	append(Ls,[E|Hs],R).
+
+disjoint(L,[]).
+disjoint(L1, [H|T]) :- not member(H,L1), disjoint(L1,T).

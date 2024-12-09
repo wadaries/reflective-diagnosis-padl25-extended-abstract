@@ -1,0 +1,306 @@
+% ------------------------the Art (1)------------------------------------------
+%% solve_trace(Goal) 
+%% The program traces the proof by side effects.
+
+solve_trace(Goal) :- solve_trace(Goal, 0).
+
+solve_trace(true, Depth) :- !.
+solve_trace((A,B), Depth) :- !,
+	solve_trace(A,Depth), solve_trace(B,Depth).
+solve_trace(A,Depth) :- 
+	builtin(A), !, A, display(A,Depth), nl.
+solve_trace(A,Depth) :- 
+	clause(A,B), display(A,Depth), nl, 
+	Depthl is Depth + 1, solve_trace(B,Depthl).
+
+% 2024/05/15 03:18:15
+repeat_trace(Goal) :- solve_trace(Goal), fail.
+
+% ------------------------the Art (2) program 17.8------------------------------------------
+%% solve(Goal,Tree)
+%% Tree is a proof tree for Goal given the program defined by clause/2.
+solve_pt(true, true) :- !.
+solve_pt((A , B), (ProofA, ProofB)) :- 
+	!, solve_pt(A,ProofA), solve_pt(B,ProofB).
+solve_pt(A, (A :- builtin)) :- 
+	builtin(A), !, A.
+solve_pt(A, (A :- Proof)) :- 
+	clause(A,B), solve_pt(B,Proof).
+
+print2(Proof) :- print2(Proof,0).
+
+print2(true,Depth) :- !, display(true,Depth).
+print2(builtin,Depth) :- !.
+
+print2((ProofA, ProofB), Depth) :- 
+	print2(ProofA,Depth), write(' /\ '), nl, print2(ProofB,Depth).
+
+print2((A :- Proof), Depth) :-  
+	Proof == true, !, 
+	display('(',Depth),write(A),write(')').
+print2((A :- Proof), Depth) :-  
+	builtin(A), !, 
+	display('(',Depth),write(A), write(' <-- builtin)').
+	% display('(',Depth),write('builtin)').
+% rule ordering matters
+print2((A :- Proof), Depth) :-  
+	Proof\= true, 
+	display('(',Depth),write(A),write(' <-- '),nl,
+	Depth2 is Depth+1,
+	print2(Proof, Depth2),write(')').
+
+ptree(Goal) :- solve_pt(Goal,T), print2(T).
+
+
+:- import term_to_atom/2 from string.
+:- import concat_atom/3 from string.
+
+rBGP_delta(true, true) :- !.
+rBGP_delta((A, B), Proof) :- 
+	!, rBGP_delta(A,ProofA), rBGP_delta(B,ProofB), join_proof(ProofA,ProofB,Proof).
+rBGP_delta(A, true) :- 
+	builtin(A), !, A.
+rBGP_delta(A, ('iteration', N:- Proof)) :- 
+	functor(A,X,Y), X==net, !, arg(1,A,N), 
+	% term_to_atom(N,N2), atom_concat('iteration ',N2, P_net),
+	clause(A,B), rBGP_delta(B,Proof).
+rBGP_delta(A, (X,K :- Proof)) :- 
+	functor(A,X,Y), X==pick, !, arg(4,A,K),
+	clause(A,B), rBGP_delta(B,Proof).
+rBGP_delta(A, ('select', NewB, 'from', R :- Proof)) :-
+	functor(A,X,Y), X==bgp_select_route, !, arg(1,A,R), arg(2,A,NewB),
+	clause(A,B), rBGP_delta(B,Proof).
+rBGP_delta(A, Proof) :- 
+	clause(A,B), rBGP_delta(B,Proof). % the default case, ignore A of no interests
+
+join_proof(ProofA,true,ProofA) :- !.
+join_proof(true,ProofB,ProofB) :- !.
+join_proof(ProofA,ProofB,(ProofA,ProofB)).
+
+% term_to_atom(X,X2), term_to_atom(K,K2), atom_concat(X2,K2,Z),
+% rBGP_delta(A, ((P_net) :- Proof)) :- 
+% 	functor(A,X,Y), X==net, !, arg(1,A,N), 
+% 	term_to_atom(N,N2), atom_concat('iteration ',N2, P_net),
+% 	clause(A,B), rBGP_delta(B,Proof).
+
+% rBGP_delta(A, ('select based on MED', R1,R2 :- Proof)) :-
+% 	functor(A,X,Y), X==select_MED, !, arg(1,A,R1), arg(2,A,R2),
+% 	clause(A,B), rBGP_delta(B,Proof).
+
+% rBGP_delta(A, ('select based on IGP', R1,R2 :- Proof)) :-
+% 	functor(A,X,Y), X==select_IGP_Cost, !, arg(1,A,R1), arg(2,A,R2),
+% 	clause(A,B), rBGP_delta(B,Proof).
+
+% rBGP_delta(A, (Z :- Proof)) :- 
+% 	functor(A,X,Y), X==bgp_select_route, !, arg(1,A,R), arg(2,A,NewB),
+% 	term_to_atom(R,R2), term_to_atom(NewB,NewB2), concat_atom(['from',R2,'select',NewB2],' ',Z),
+% 	clause(A,B), rBGP_delta(B,Proof).
+
+
+	
+
+
+% ------------------------------------------------------------------
+
+cb(true, []) :- !.
+cb((A , B), C) :- 
+	!, cb(A,CA), cb(B,CB), append(CA,CB,C).
+cb(A, []) :- 
+	builtin(A), !, A.
+
+cb(A, [(K:R)|RB]) :- 
+	functor(A,X,Y), X==bgp_process, !, arg(Y,A,R), arg(2,A,K),
+	clause(A,B), cb(B,RB).
+
+cb(A, Rs) :-
+	clause(A,B), cb(B,Rs).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% collect(Goal,ProofTree,list-of-edges-used)
+collect(true, true, []) :- !.
+collect((A , B) , (ProofA, ProofB), C) :- 
+	!, collect(A,ProofA,CA), collect(B,ProofB,CB),
+	append(CA,CB,C).
+
+collect(A,(A :- builtin),[]) :- builtin(A), !, A. % builtin(not A).
+
+collect(A,(A :- Proof), C) :-
+	functor(A,X,Y), X==edge, !,
+	clause(A,B), collect(B,Proof, C2), C=[A|C2].
+collect(A,(A :- Proof), C) :-
+	functor(A,X,Y), X\=edge, !,
+	clause(A,B), collect(B,Proof, C).
+
+% important use cases (2024/05/26 23:33:22)
+% tested:
+% ?- collect(dplane(1,4,X),T,C), print2(T).
+% ?- collect(dplane(1,4,X),T,C), not member(edge(1,2),C), print2(T).
+% ?- collect(dplane(X,Y,2),T,C), member(edge(1,2),C), print2(T).
+% ?- collect(dplane(1,4,1),T1,C1), collect(dplane(X,Y,Z),T2,C2), disjoint(C1,C2).
+
+% problematic rule
+% collect((not A), (not A), C) :-
+% 	!, not A.
+
+% test
+% ? collect(path(1,3,X),T,Y),not member(edge(1,2),Y).
+
+% ----------------------- facilities -------------------------------------------
+
+% display2(A, Depth) :- functor(A,X,Y), X==edge, Spacing is 3*Depth, put_spaces(Spacing), write(A), nl.
+% display2(A, Depth) :- functor(A,X,Y), X\=edge.
+
+display(A, Depth) :- Spacing is 3*Depth, put_spaces(Spacing), write(A).
+
+put_spaces(N) :- 
+	between(1,N,I), put_char(' '), fail.
+put_spaces(N).
+
+%% between(I,J,K)
+%% K is an integer between the integers I and ] inclusive.
+between(I,J,I) :- I =< J.
+between(I,J,K) :- I < J, I1 is I+1, between(I1,J,K).
+
+
+% 2024/06/15 20:21:50
+% ------------------------------------------------------------------
+
+print3(Proof) :- print3(Proof,0).
+
+print3(true,Depth) :- !, display(true,Depth).
+print3(builtin,Depth) :- !.
+
+print3((ProofA, ProofB), Depth) :- 
+	print3(ProofA,Depth), write(' AND '), nl, print3(ProofB,Depth).
+
+print3((A :- Proof), Depth) :-  
+	Proof == true, !, 
+	display('(',Depth),write(A),write(')').
+print3((A :- Proof), Depth) :-  
+	builtin(A), !, 
+	display('(',Depth),write(A), write(' <-- builtin)').
+	% display('(',Depth),write('builtin)').
+% rule ordering matters
+print3((A :- Proof), Depth) :-  
+	Proof\= true, 
+	display('(',Depth),write(A),write(' BECAUSE '),nl,
+	Depth2 is Depth+1,
+	print3(Proof, Depth2),write(')').
+
+% ------------------------------------------------------------------
+% 2024/06/21 03:02:15
+
+explain(true, true) :- !.
+explain((A, B), Proof) :- 
+	!, explain(A,ProofA), explain(B,ProofB), join_proof4(ProofA,ProofB,Proof).
+explain(A, true) :- 
+	builtin(A), !, A.
+explain(A, (['iteration', N] :- Proof)) :- 
+	functor(A,X,Y), X==net, !, arg(1,A,N), 
+	clause(A,B), explain(B,Proof).
+explain(A, ([X,K,'for execution'] :- Proof)) :- 
+	functor(A,X,Y), X==pick, !, arg(4,A,K),
+	clause(A,B), explain(B,Proof).
+explain(A, (['select', NewB, 'from', R] :- Proof)) :-
+	functor(A,X,Y), X==bgp_select_route, !, arg(1,A,R), arg(2,A,NewB),
+	clause(A,B), explain(B,Proof).
+explain(A, Proof) :- 
+	clause(A,B), explain(B,Proof). % the default case, ignore A of no interests
+
+join_proof4(ProofA,true,ProofA) :- !.
+join_proof4(true,ProofB,ProofB) :- !.
+join_proof4(ProofA,ProofB,(ProofA,ProofB)).
+
+% T = ([iteration ,6] :- (([pick, ,a] :- true),([select ,[(i,[10,100],10,5,[b])], from ,[(i,[10,100],10,5,[b]),(*,[6,100],1,4,[c]),(i,[6,100],0,13,[d,e])]] :- true)),([iteration ,5] :- (([pick, ,d] :- true),([select ,[(*,[6,100],0,12,[e])], from ,[(*,[6,100],0,12,[e]),(i,[6,100],1,5,[a,c])]] :- true)),([iteration ,4] :- (([pick, ,d] :- true),([select ,[(i,[10,100],10,6,[a,b])], from ,[(*,[6,100],0,12,[e]),(i,[10,100],10,6,[a,b])]] :- true)),([iteration ,3] :- (([pick, ,a] :- true),([select ,[(i,[6,100],1,4,[c])], from ,[(*,[10,100],10,5,[b]),(i,[6,100],1,4,[c])]] :- true)),([iteration ,2] :- (([pick, ,d] :- true),([select ,[(i,[6,100],0,12,[e])], from ,[(i,[6,100],0,12,[e]),(i,[6,100],1,5,[a,c])]] :- true)),([iteration ,1] :- (([pick, ,a] :- true),([select ,[(i,[10,100],10,5,[b])], from ,[(i,[10,100],10,5,[b]),(*,[6,100],1,4,[c]),(i,[6,100],0,13,[d,e])]] :- true)),([iteration ,0] :- true))))))).
+
+
+print4(Proof) :- print4(Proof,0).
+
+print4(true,Depth) :- !, display(true,Depth).
+print4(builtin,Depth) :- !.
+
+print4((ProofA, ProofB), Depth) :- 
+	print4(ProofA,Depth), write(' AND '), nl, print4(ProofB,Depth).
+
+print4((A :- Proof), Depth) :-  
+	Proof == true, !, 
+	display('(',Depth),pretty_write(A),write(')').
+
+print4((A :- Proof), Depth) :-
+	builtin(A), !, 
+	display('(',Depth),write(A), write(' <-- builtin)').
+
+print4((A :- Proof), Depth) :-  
+	Proof\= true, 
+	display('(',Depth), pretty_write(A), write(':'),nl,
+	Depth2 is Depth+1,
+	print4(Proof, Depth2),write(')').
+
+pretty_write([H|T]) :- write(H), write(' '), pretty_write(T).
+pretty_write([]).
+
+% ------------------------------------------------------------------
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% identify iBGP oscillation
+
+rBGP(true, true, []) :- !.
+rBGP((A , B) , (ProofA, ProofB), C) :- 
+	!, rBGP(A,ProofA,CA), rBGP(B,ProofB,CB),
+	append(CA,CB,C).
+
+rBGP(A,(A :- builtin),[]) :- builtin(A), !, A. % builtin(not A).
+
+rBGP(A,(A :- Proof), C) :-
+	functor(A,X,Y), X==bgp_process, !, arg(Y,A,R), arg(2,A,K), 
+	clause(A,B), rBGP(B,Proof, C2), C=[(K:R)|C2].
+rBGP(A,(A :- Proof), C) :-
+	functor(A,X,Y), X\=bgp_process, !,
+	clause(A,B), rBGP(B,Proof, C).
+
+% extract(A,result) :- arg(6,A,result).
+
+% tested: rBGP(demo(2,X,Y,Z),T,C). 2024/06/08 04:34:01
+
+% arg(6,bgp_process([(a,[(i,[10,100],10,5,[b]),(*,[6,100],1,4,[c])]),(d,[(*,[6,100],0,12,[e])])],a,(i,[6,100],0,12,[d,e]),[(a,[(*,[10,100],10,5,[b]),(i,[6,100],1,4,[c]),(i,[6,100],0,13,[d,e])]),(d,[(*,[6,100],0,12,[e])])],1,(i,[10,100],10,5,[b])),A).
+
+% A = (i,[10,100],10,5,[b])
+
+% tested: 2024/06/11 08:59:44
+% load_dyn(net).
+% load_dyn(ibgp).
+% load_dyn(meta).
+% | ?- rBGP(demo(6,X,Y,Z),T,C).
+% C = [a : (i,[10,100],10,5,[b]),d : (*,[6,100],0,12,[e]),d : (i,[10,100],10,6,[a,b]),a : (i,[6,100],1,4,[c]),d : (i,[6,100],0,12,[e]),a : (i,[10,100],10,5,[b])]
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% % refect on the proof and return corresponding info
+% rBGP2(true, []) :- !.
+% rBGP2((A , B), C) :- 
+% 	!, rBGP2(A,CA), rBGP2(B,CB),
+% 	append(CA,CB,C).
+
+% rBGP2(A, []) :- builtin(A), !, A. % builtin(not A).
+
+% rBGP2(A, C) :-
+% 	functor(A,X,Y), X==bgp_process, !, arg(Y,A,R), arg(2,A,K), 
+% 	clause(A,B), rBGP2(B, C2), C=[(K:R)|C2].
+% rBGP2(A, C) :-
+% 	functor(A,X,Y), X\=bgp_process, !,
+% 	clause(A,B), rBGP2(B, C).
+
+% 2024/06/14 10:53:47
+% tested:
+% rBGP2(demo(6,X,Y,Z),C).
+% ---------Initialize the state of the iBGP system---------
+% X = [(a,[(*,[10,100],10,5,[b]),(i,[6,100],1,4,[c]),(i,[6,100],0,13,[d,e])]),(d,[(*,[6,100],0,12,[e]),(i,[6,100],1,5,[a,c])])]
+% Y = [(a,[]),(d,[(i,[10,100],10,5,[a,b])])]
+% Z = [d]
+% C = [a : (i,[10,100],10,5,[b]),d : (*,[6,100],0,12,[e]),d : (i,[10,100],10,6,[a,b]),a : (i,[6,100],1,4,[c]),d : (i,[6,100],0,12,[e]),a : (i,[10,100],10,5,[b])]
+% yes
+
+% | ?- rBGP2(demo_net(6,X),C).
+% ---------Initialize the state of the iBGP system---------
+% X = [[(a,[(*,[10,100],10,5,[b]),(i,[6,100],1,4,[c]),(i,[6,100],0,13,[d,e])]),(d,[(*,[6,100],0,12,[e]),(i,[6,100],1,5,[a,c])])],[(a,[]),(d,[(i,[10,100],10,5,[a,b])])],[d]]
+% C = [a : (i,[10,100],10,5,[b]),d : (*,[6,100],0,12,[e]),d : (i,[10,100],10,6,[a,b]),a : (i,[6,100],1,4,[c]),d : (i,[6,100],0,12,[e]),a : (i,[10,100],10,5,[b])]
+
+% yes

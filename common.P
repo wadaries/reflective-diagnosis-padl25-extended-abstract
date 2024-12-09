@@ -1,0 +1,61 @@
+% ------------------------------------------------------------------
+% 2024/06/14 07:23:56
+net(0,S,S).
+net(B,S,T) :- 
+	B>0, B1 is B-1,
+	delta(S,M), 
+	net(B1,M,T).
+
+% net(1,S,T) :- delta(S,T).
+% net(B,S,T) :- 
+% 	B>1, B1 is B-1,
+% 	delta(S,M), 
+% 	net(B1,M,T).
+
+% | ?- collect(net(5,1,X),T,C), not sf(C).
+% X = 6
+% T = (net(5,1,6) :- (5 > 0 :- builtin),(4 is 5 - 1 :- builtin),(delta([1],[5]) :- (edge(1,5) :- true)),(net(4,5,6) :- (4 > 0 :- builtin),(3 is 4 - 1 :- builtin),(delta([5],[6]) :- (edge(5,6) :- true)),(net(3,6,6) :- (3 > 0 :- builtin),(2 is 3 - 1 :- builtin),(delta([6],[1]) :- (edge(6,1) :- true)),(net(2,1,6) :- (2 > 0 :- builtin),(1 is 2 - 1 :- builtin),(delta([1],[5]) :- (edge(1,5) :- true)),(net(1,5,6) :- (1 > 0 :- builtin),(0 is 1 - 1 :- builtin),(delta([5],[6]) :- (edge(5,6) :- true)),(net(0,6,6) :- true))))))
+% C = [edge(1,5),edge(5,6),edge(6,1),edge(1,5),edge(5,6)]
+
+% yes
+
+% % ------------------------------------------------------------------
+
+builtin(not A).
+builtin(A is B). builtin(read(X)). builtin(integer(X)). builtin(clause(A,B)).
+builtin(A > B). builtin(write(X)) . builtin(functor(T,F,N)). 
+builtin(builtin(X)).
+builtin(random(X,Y,Z)).
+builtin(findall(X,Y,Z)).
+builtin(X \= Y). builtin(X >= Y). builtin(X =< Y). builtin(X==Y). builtin(X<Y). builtin(X=Y).
+builtin(member(X,Y)). builtin(length(X,Y)). builtin(append(X,Y,Z)). builtin(reverse(X,Y)). builtin(ith(K,L,E)). builtin(loop_free_path(X,Y)).
+
+builtin(retain_MED(X,Y,Z)).
+% builtin(select_MED(X,Y)).
+% builtin(select_IGP_Cost(X,Y)).
+builtin(mark_selected(X,Y,Z)).
+builtin(init(X,Y,Z)).
+
+% % ------------------------------------------------------------------
+% facilities
+
+member(X,[X|T]).
+member(X,[H|T]) :- member(X,T).
+
+append([],L,L).
+append([H|T],L1,R) :-
+	append(T,L1,R1), R=[H|R1].
+
+length([],0).
+length([H|T],L) :- length(T,L1), L is L1+1.
+
+
+loop_free_path(X,[]).
+loop_free_path(X,[Y|T]) :- X\=Y, loop_free_path(X,T).
+
+% safe: a list in which no element recurs more than once.
+sf([X]).
+sf([H|T]) :- loop_free_path(H,T), sf(T).
+
+disjoint(L,[]).
+disjoint(L1, [H|T]) :- not member(H,L1), disjoint(L1,T).
